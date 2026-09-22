@@ -89,9 +89,23 @@ was guessing at.
 | Formal complaint to Customer Relations | American Airlines | 60 days, "DOT requires airlines to send consumers written responses addressing complaints within 60 days" |
 | File a complaint with the Department of Transportation | U.S. Department of Transportation | 30 days |
 
-**An escalation was really sent.** The clock was wound past its deadline, the sweep
-caught it, OpenAI drafted the email, and AgentMail's own API confirms it with the label
-`sent`. Opening line of the generated draft:
+**The full loop ran, in both directions.**
+
+Outbound: the clock was wound past its deadline, the sweep caught it, OpenAI drafted the
+email, and AgentMail's own API confirms it with the label `sent`.
+
+Inbound: two real emails were sent to the case inbox from outside, one from a Gmail
+account and one from a separate AgentMail address. Both were delivered, hit the
+svix-signed webhook, and were classified as `holding_acknowledgement`, with this reason
+written back to the board:
+
+> "This reply confirms receipt of your complaint and promises to look into it, but does
+> not resolve the issue."
+
+That is the distinction the product exists for. The email looks like progress, changes
+nothing, and does not start the clock that unlocks the ombudsman.
+
+Opening line of the generated escalation draft:
 
 > "I am writing to follow up on my complaint submitted to your lettings branch on
 > 6 January. I provided photos and cited the Homes (Fitness for Human Habitation) Act
@@ -155,11 +169,10 @@ no longer returned.
 
 ## Honest notes
 
-- **Inbound email is registered and enabled but not yet exercised end to end.** The
-  webhook is live at `/api/agentmail/webhook` and the handler, routing and classifier
-  are written, but no real external reply has landed at the time of writing. AgentMail
-  will not deliver self-addressed mail, so it needs a genuine external sender. Treat the
-  inbound path as unproven until the video shows it.
+- Inbound routing uses the thread when the outbound thread id has been captured, and
+  otherwise falls back to the newest open case on that inbox. The two test replies
+  landed via that fallback, so they attached to the newest case rather than the thread
+  they answered. The classification was correct; the routing was a heuristic.
 - The statutory windows are genuinely weeks long, so the interface has a clearly
   labelled control that winds the current clock past its deadline. The clock, the sweep,
   the draft and the send are all real.
