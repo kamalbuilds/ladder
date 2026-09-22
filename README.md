@@ -112,13 +112,17 @@ npx @convex-dev/static-hosting upload
 ```
 convex/
   convex.config.ts   three components mounted; app routes under /api so static hosting owns /
-  schema.ts          cases, rungs, findings, messages
+  schema.ts          cases, rungs, findings, messages, watches
   jurisdiction.ts    Firecrawl scrape + search -> OpenAI -> a sourced ladder
   classify.ts        what kind of reply just arrived, and which clock that starts
   escalate.ts        the clock sweep, the draft, and the send
   email.ts           inbox, inbound webhook handler, outbound, thread capture
-  crons.ts           sweeps expired clocks every 5 minutes
+  watch.ts           re-reads the pages a ladder relied on, and diffs what matters
+  cases.ts           board query, evidence pack, case lifecycle
+  crons.ts           clock sweep every 5 minutes, source re-read every 6 hours
   http.ts            AgentMail svix webhook at /api/agentmail/webhook
+test/
+  e2e.sh             21 browser assertions against the live deployment
 ```
 
 Stack: Convex (database, queries, mutations, actions, scheduler, crons, live queries,
