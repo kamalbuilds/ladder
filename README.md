@@ -37,6 +37,39 @@ A US airline (American Airlines), which routes somewhere completely different:
 
 Nothing in either ladder is hardcoded. Both were crawled at request time.
 
+## Features
+
+- **Jurisdiction mapping.** Crawls the counterparty's own site plus the official pages
+  that name the regulator, then builds an ordered ladder with each published window
+  attached to the rung it governs.
+- **A real inbox per case.** Escalations go out from it; replies come back into it
+  through an svix-signed webhook.
+- **Reply classification.** The distinction that costs people their rights is a holding
+  acknowledgement versus a final response. One feels like progress and changes nothing.
+- **Clock sweep.** A cron finds expired windows, drafts the escalation to the next rung
+  and sends it.
+- **Source watching.** Re-reads the pages each ladder was built from every six hours and
+  reports when a deadline, authority or contact route moves. Cosmetic edits are ignored.
+- **Evidence pack.** A dated, cited complaint record with the full correspondence and
+  Ladder's assessment of each reply, downloadable as markdown.
+
+## Testing
+
+```bash
+./test/e2e.sh [base_url] [browser_profile]
+```
+
+Drives the live deployment through a real browser. 21 assertions covering asset
+delivery, unsigned-webhook rejection, case creation, ladder rendering, the evidence
+pack, source re-reading, clock expiry producing an outbound escalation, and zero
+runtime errors. Verified non-vacuous by mutating the UI, confirming red, restoring and
+confirming green.
+
+## Architecture
+
+See `docs/architecture.html` for the system diagram, the crawl-to-ladder sequence, and
+the clock and reply lifecycle.
+
 ## Running it
 
 ```bash

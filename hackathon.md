@@ -112,6 +112,42 @@ Opening line of the generated escalation draft:
 > 2018, yet I have received no meaningful reply and no inspection has been arranged.
 > The published window to resolve this matter within 15 working days has now passed."
 
+## Two features that exist because of how this problem actually fails
+
+**Ladder re-reads its own sources.** Organisations rewrite their complaints procedure
+without telling anyone, and the deadline you were relying on moves with it. Every page a
+ladder was built from is watched. A cron re-reads them, normalises away dates, times and
+cache-busting parameters so the check is not pure noise, hashes the result, and when the
+content genuinely changed asks one narrow question: did a deadline, a named authority or
+a contact route move? Cosmetic rewrites are ignored. A change that matters becomes a
+dated finding on the case and appears in the evidence pack.
+
+Firecrawl's own DevRel called `/monitor` the under-used endpoint of this hackathon. The
+Convex component does not expose it, so this is built on `scrape` with our own diffing.
+
+**The evidence pack.** The document you actually attach to an ombudsman filing: a dated
+complaint record, every escalation step with its published window and source URL, the
+full correspondence with Ladder's assessment of each reply, every quote with its link,
+and a list of any published rules that changed while the complaint was open. Built
+server-side as one reactive Convex query, downloadable as markdown.
+
+## Testing
+
+`test/e2e.sh` drives the live deployment through a real browser. 21 assertions:
+
+- asset delivery, MIME types, SPA fallback
+- the inbound webhook rejects an unsigned POST with 401, so signature verification is
+  demonstrably on
+- the gate, case creation, and a sourced ladder rendering
+- every source link on the page is a real `http(s)` URL, which is the anti-hallucination
+  guarantee checked from the DOM rather than from our own code
+- the evidence pack, source re-reading, and clock expiry producing an outbound escalation
+- zero uncaught exceptions and zero network failures
+
+**The suite is proven able to fail.** We mutated the legal disclaimer out of the UI,
+deployed it, confirmed the corresponding assertion went red, restored it, and confirmed
+21 of 21 green again. A green run that could not have gone red is not evidence.
+
 ## Why this is not the other 93 apps
 
 We enumerated every submission on the hackathon tag before choosing. 55 of 93 are the
