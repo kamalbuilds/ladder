@@ -184,6 +184,21 @@ export const setRungState = internalMutation({
   },
 });
 
+/** Removes a case and everything hanging off it. Used to clear test data. */
+export const purge = internalMutation({
+  args: { caseId: v.id("cases") },
+  handler: async (ctx, { caseId }) => {
+    for (const table of ["rungs", "findings", "messages"] as const) {
+      const rows = await ctx.db
+        .query(table)
+        .withIndex("by_case", (q) => q.eq("caseId", caseId))
+        .collect();
+      for (const r of rows) await ctx.db.delete(r._id);
+    }
+    await ctx.db.delete(caseId);
+  },
+});
+
 /** Demo affordance: wind a rung's clock back so an expiry can be watched live. */
 export const fastForwardClock = mutation({
   args: { caseId: v.id("cases") },

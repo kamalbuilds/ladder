@@ -4,7 +4,64 @@ import { components, internal } from "./_generated/api";
 import { internalAction } from "./_generated/server";
 import { chatJson } from "./llm";
 
+declare const process: { env: Record<string, string | undefined> };
+
 const firecrawl = new FirecrawlClient(components.firecrawl);
+
+/**
+ * Scrape one page to markdown.
+ *
+ * The component is tried first. It can throw on pages whose response contains an
+ * object key with a non-ASCII character, because Convex field names must be ASCII
+ * and the component converts the whole response to a Convex value. Observed live on
+ * foxtons.co.uk: "Field name Foxtons Complaints Procedure – Resolving Issues with
+ * Care and Transparency has invalid character '–'".
+ *
+ * Falling back to Firecrawl's REST API keeps full page text available, which
+ * materially changes ladder quality: without it we are building from search
+ * snippets instead of the page that actually states the deadline.
+ */
+async function scrapeMarkdown(
+  ctx: any,
+  url: string,
+  onlyMainContent: boolean,
+): Promise<string | null> {
+  try {
+    const doc = await firecrawl.scrape(ctx, url, {
+      formats: ["markdown"],
+      onlyMainContent,
+      maxAge: 3_600_000,
+    });
+    if (doc?.markdown) return doc.markdown;
+  } catch (e) {
+    console.warn(
+      `component scrape failed for ${url}, falling back to REST:`,
+      String(e).slice(0, 160),
+    );
+  }
+
+  const key = process.env.FIRECRAWL_API_KEY;
+  if (!key) return null;
+  try {
+    const res = await fetch("https://api.firecrawl.dev/v2/scrape", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${key}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ url, formats: ["markdown"], onlyMainContent }),
+    });
+    if (!res.ok) {
+      console.warn(`firecrawl REST ${res.status} for ${url}`);
+      return null;
+    }
+    const body = (await res.json()) as { data?: { markdown?: string } };
+    return body.data?.markdown ?? null;
+  } catch (e) {
+    console.warn("firecrawl REST threw", String(e).slice(0, 160));
+    return null;
+  }
+}
 
 type LadderPlan = {
   rungs: Array<{
@@ -40,13 +97,48 @@ Hard rules:
 - clockDays is the published window in DAYS, converted from whatever unit the page
   used, and clockLabel says where it comes from, e.g. "8 weeks before the Ombudsman
   will look at it". If no page states a window, omit both. Never guess a deadline.
+- IMPORTANT: if the pages state a window that applies to a rung, that window belongs
+  on the rung as clockDays, not only in findings. A rung with no clock never triggers
+  anything, so a deadline you found and did not attach is a deadline the user misses.
+  Convert units: "20 working days" is 28, "8 weeks" is 56, "12 months" is 365.
+- Only the rung a person is waiting on needs a clock. A rung describing a window to
+  file BY (for example "within 12 months of the final response") still gets clockDays,
+  because it is the deadline that matters for that step.
 - Order rungs from the cheapest, earliest, most internal step (order 0) to the final
   external authority. Typically 3 to 5 rungs.
 - "contact" is a real email address or a form URL found in the pages. Omit if absent.
 - If the pages do not identify a regulator, say so in a finding of kind "other"
   rather than inventing one.
 
-Return JSON: { "rungs": [...], "findings": [...] }`;
+Return exactly this JSON shape, with rungs and findings as two SEPARATE top-level
+arrays. Never nest findings inside a rung.
+
+{
+  "rungs": [
+    {
+      "order": 0,
+      "name": "Formal complaint to the agency",     // required, short
+      "authority": "Hastings Letting Agents",        // required, who handles it
+      "action": "Send a dated complaint to ...",     // required, one or two sentences
+      "contact": "complaints@example.com",           // optional
+      "clockDays": 56,                               // optional, DAYS, number only
+      "clockLabel": "8 weeks before the Ombudsman will look at it", // optional
+      "sourceUrl": "https://..."                     // optional, must be a supplied URL
+    }
+  ],
+  "findings": [
+    {
+      "claim": "They are a member of The Property Ombudsman",
+      "sourceUrl": "https://...",
+      "quote": "exact substring from the page",
+      "kind": "scheme_membership"
+    }
+  ]
+}
+
+kind is one of: regulator, scheme_membership, deadline, contact, other.
+Every rung MUST have name, authority and action. Omit a field entirely rather than
+sending null.`;
 
 export const mapLadder = internalAction({
   args: { caseId: v.id("cases") },
@@ -65,19 +157,9 @@ export const mapLadder = internalAction({
       // "check the footer of the agency website to see which body they belong to".
       if (kase.counterpartyUrl) {
         await note(`Reading ${kase.counterparty}'s own site`);
-        try {
-          const doc = await firecrawl.scrape(ctx, kase.counterpartyUrl, {
-            onlyMainContent: false,
-            maxAge: 3_600_000,
-          });
-          if (doc?.markdown) {
-            pages.push({
-              url: kase.counterpartyUrl,
-              text: doc.markdown.slice(0, 12000),
-            });
-          }
-        } catch (e) {
-          console.warn("counterparty scrape failed", String(e).slice(0, 200));
+        const md = await scrapeMarkdown(ctx, kase.counterpartyUrl, false);
+        if (md) {
+          pages.push({ url: kase.counterpartyUrl, text: md.slice(0, 12000) });
         }
       }
 
@@ -113,15 +195,8 @@ export const mapLadder = internalAction({
 
       for (const p of official) {
         await note(`Reading ${new URL(p.url).hostname}`);
-        try {
-          const doc = await firecrawl.scrape(ctx, p.url, {
-            onlyMainContent: true,
-            maxAge: 3_600_000,
-          });
-          if (doc?.markdown) p.text = doc.markdown.slice(0, 12000);
-        } catch (e) {
-          console.warn("official scrape failed", String(e).slice(0, 200));
-        }
+        const md = await scrapeMarkdown(ctx, p.url, true);
+        if (md) p.text = md.slice(0, 12000);
       }
 
       if (pages.length === 0) {
@@ -165,20 +240,69 @@ ${corpus}`,
 
       // Drop anything the model sourced to a URL we never crawled. This is the
       // check that stops a confident hallucinated regulator reaching the UI.
+      // Rebuild every object field by field. Spreading the model's output passes
+      // through whatever extra keys it invented and lets a missing required field
+      // reach the validator, which is exactly how the first live run died.
       const allowed = new Set(pages.map((p) => p.url));
-      const rungs = (plan.rungs ?? [])
-        .map((r, i) => ({
-          ...r,
-          order: typeof r.order === "number" ? r.order : i,
-          sourceUrl:
-            r.sourceUrl && allowed.has(r.sourceUrl) ? r.sourceUrl : undefined,
-        }))
+      const str = (x: unknown): string | undefined => {
+        if (typeof x !== "string") return undefined;
+        const t = x.trim();
+        return t.length > 0 ? t : undefined;
+      };
+      const sourced = (x: unknown): string | undefined => {
+        const s = str(x);
+        return s && allowed.has(s) ? s : undefined;
+      };
+
+      const rungs = (Array.isArray(plan.rungs) ? plan.rungs : [])
+        .map((r: any) => {
+          const name = str(r?.name);
+          const authority = str(r?.authority);
+          // A rung with no name or no authority is not a rung. Drop it rather
+          // than inventing a label for it.
+          if (!name || !authority) return null;
+          const days = Number(r?.clockDays);
+          return {
+            order: Number.isFinite(Number(r?.order)) ? Number(r.order) : 999,
+            name,
+            authority,
+            action: str(r?.action) ?? `Contact ${authority} about this complaint.`,
+            contact: str(r?.contact),
+            clockDays: Number.isFinite(days) && days > 0 ? days : undefined,
+            clockLabel: str(r?.clockLabel),
+            sourceUrl: sourced(r?.sourceUrl),
+          };
+        })
+        .filter((r): r is NonNullable<typeof r> => r !== null)
         .sort((a, b) => a.order - b.order)
         .map((r, i) => ({ ...r, order: i }));
 
-      const findings = (plan.findings ?? []).filter((f) =>
-        allowed.has(f.sourceUrl),
-      );
+      const validKinds = new Set([
+        "regulator",
+        "scheme_membership",
+        "deadline",
+        "contact",
+        "other",
+      ]);
+      const findings = (Array.isArray(plan.findings) ? plan.findings : [])
+        .map((f: any) => {
+          const claim = str(f?.claim);
+          const sourceUrl = sourced(f?.sourceUrl);
+          if (!claim || !sourceUrl) return null;
+          const kind = str(f?.kind);
+          return {
+            claim,
+            sourceUrl,
+            quote: str(f?.quote),
+            kind: (kind && validKinds.has(kind) ? kind : "other") as
+              | "regulator"
+              | "scheme_membership"
+              | "deadline"
+              | "contact"
+              | "other",
+          };
+        })
+        .filter((f): f is NonNullable<typeof f> => f !== null);
 
       if (rungs.length === 0) {
         throw new Error("model returned no rungs");

@@ -104,5 +104,8 @@ export default defineSchema({
     receivedAt: v.number(),
   })
     .index("by_case", ["caseId", "receivedAt"])
-    .index("by_agentmail_id", ["agentmailMessageId"]),
+    .index("by_agentmail_id", ["agentmailMessageId"])
+    // Inbound routing key. Cases can share one AgentMail inbox on the free plan,
+    // so the thread is what actually identifies which case a reply belongs to.
+    .index("by_thread", ["threadId"]),
 });

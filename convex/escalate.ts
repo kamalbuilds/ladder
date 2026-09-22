@@ -1,10 +1,7 @@
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
-import {
-  internalAction,
-  internalMutation,
-  internalQuery,
-} from "./_generated/server";
+import { internalAction, internalQuery } from "./_generated/server";
+import type { Id } from "./_generated/dataModel";
 import { chatJson } from "./llm";
 
 type Draft = { subject: string; body: string };
@@ -28,10 +25,12 @@ The email must:
 
 Return JSON: { "subject": string, "body": string }`;
 
+type DueRung = { rungId: Id<"rungs">; caseId: Id<"cases"> };
+
 export const sweepExpiredClocks = internalAction({
   args: {},
-  handler: async (ctx) => {
-    const due = await ctx.runQuery(internal.escalate.dueRungs, {});
+  handler: async (ctx): Promise<number> => {
+    const due: DueRung[] = await ctx.runQuery(internal.escalate.dueRungs, {});
     for (const item of due) {
       await ctx.runAction(internal.escalate.escalateRung, {
         rungId: item.rungId,
@@ -46,19 +45,26 @@ export const dueRungs = internalQuery({
   args: {},
   handler: async (ctx) => {
     const now = Date.now();
+    // The lower bound is load-bearing. In Convex, undefined sorts before every
+    // number, so a bare .lte("dueAt", now) also matches every active rung whose
+    // dueAt is undefined, i.e. every rung with no published deadline. That made
+    // the sweep escalate rungs that had no clock at all, and it ran until the
+    // 1800s action timeout. gte(1) excludes the undefined bucket.
     const active = await ctx.db
       .query("rungs")
-      .withIndex("by_due", (q) => q.eq("state", "active").lte("dueAt", now))
+      .withIndex("by_due", (q) =>
+        q.eq("state", "active").gte("dueAt", 1).lte("dueAt", now),
+      )
       .take(25);
     return active
-      .filter((r) => r.dueAt !== undefined)
+      .filter((r) => typeof r.dueAt === "number")
       .map((r) => ({ rungId: r._id, caseId: r.caseId }));
   },
 });
 
 export const escalateRung = internalAction({
   args: { rungId: v.id("rungs"), caseId: v.id("cases") },
-  handler: async (ctx, { rungId, caseId }) => {
+  handler: async (ctx, { rungId, caseId }): Promise<void> => {
     const ctxBundle = await ctx.runQuery(internal.escalate.escalationContext, {
       rungId,
       caseId,
@@ -97,7 +103,14 @@ The step this email is for:
   source: ${target.sourceUrl ?? "not sourced"}
 
 Sourced facts you may cite, and nothing else:
-${findings.map((f) => `- ${f.claim}${f.quote ? ` — quoted: "${f.quote}"` : ""} [${f.sourceUrl}]`).join("\n") || "- none"}`,
+${
+          findings
+            .map(
+              (f: { claim: string; quote?: string; sourceUrl: string }) =>
+                `- ${f.claim}${f.quote ? ` (quoted: "${f.quote}")` : ""} [${f.sourceUrl}]`,
+            )
+            .join("\n") || "- none"
+        }`,
       });
 
       await ctx.runMutation(internal.email.sendFromCase, {
