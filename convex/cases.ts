@@ -7,21 +7,47 @@ import {
 } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { caseStatus, rungState } from "./schema";
+import { requireEmail, requireCaseAccess, normaliseEmail } from "./auth";
 
+/**
+ * Cases the signed-in person owns, plus any they have been invited onto.
+ * Identity comes from the session, never from an argument.
+ */
 export const list = query({
-  args: { ownerEmail: v.string() },
-  handler: async (ctx, { ownerEmail }) =>
-    await ctx.db
+  args: { token: v.string() },
+  handler: async (ctx, { token }) => {
+    const email = await requireEmail(ctx, token);
+
+    const owned = await ctx.db
       .query("cases")
-      .withIndex("by_owner", (q) => q.eq("ownerEmail", ownerEmail))
+      .withIndex("by_owner", (q) => q.eq("ownerEmail", email))
       .order("desc")
-      .collect(),
+      .collect();
+
+    const memberships = await ctx.db
+      .query("members")
+      .withIndex("by_email", (q) => q.eq("email", email))
+      .collect();
+
+    const shared = [];
+    for (const m of memberships) {
+      const k = await ctx.db.get(m.caseId);
+      if (k && normaliseEmail(k.ownerEmail) !== email) {
+        shared.push({ ...k, sharedWithMe: true as const });
+      }
+    }
+
+    return [...owned.map((c) => ({ ...c, sharedWithMe: false as const })), ...shared].sort(
+      (a, b) => b.createdAt - a.createdAt,
+    );
+  },
 });
 
 /** Everything the board renders, in one reactive read. */
 export const board = query({
-  args: { caseId: v.id("cases") },
-  handler: async (ctx, { caseId }) => {
+  args: { token: v.string(), caseId: v.id("cases") },
+  handler: async (ctx, { token, caseId }) => {
+    const { role } = await requireCaseAccess(ctx, token, caseId);
     const kase = await ctx.db.get(caseId);
     if (!kase) return null;
 
@@ -45,12 +71,19 @@ export const board = query({
         .collect(),
     ]);
 
+    const members = await ctx.db
+      .query("members")
+      .withIndex("by_case", (q) => q.eq("caseId", caseId))
+      .collect();
+
     return {
       case: kase,
+      role,
       rungs: rungs.sort((a, b) => a.order - b.order),
       findings,
       messages,
       watches,
+      members,
       now: Date.now(),
     };
   },
@@ -58,15 +91,17 @@ export const board = query({
 
 export const create = mutation({
   args: {
+    token: v.string(),
     title: v.string(),
     counterparty: v.string(),
     counterpartyUrl: v.optional(v.string()),
-    ownerEmail: v.string(),
     summary: v.optional(v.string()),
   },
-  handler: async (ctx, args) => {
+  handler: async (ctx, { token, ...args }) => {
+    const ownerEmail = await requireEmail(ctx, token);
     const caseId = await ctx.db.insert("cases", {
       ...args,
+      ownerEmail,
       status: "mapping",
       working: "Finding who regulates them",
       createdAt: Date.now(),
@@ -191,8 +226,9 @@ export const setRungState = internalMutation({
 
 /** Re-reads this case's source pages now rather than waiting for the 6-hour cron. */
 export const recheckSources = mutation({
-  args: { caseId: v.id("cases") },
-  handler: async (ctx, { caseId }) => {
+  args: { token: v.string(), caseId: v.id("cases") },
+  handler: async (ctx, { token, caseId }) => {
+    await requireCaseAccess(ctx, token, caseId);
     await ctx.db.patch(caseId, { working: "Re-reading the pages it relied on" });
     await ctx.scheduler.runAfter(0, internal.watch.checkNow, { caseId });
   },
@@ -204,8 +240,9 @@ export const recheckSources = mutation({
  * reactive read rather than assembled in the browser.
  */
 export const evidencePack = query({
-  args: { caseId: v.id("cases") },
-  handler: async (ctx, { caseId }) => {
+  args: { token: v.string(), caseId: v.id("cases") },
+  handler: async (ctx, { token, caseId }) => {
+    await requireCaseAccess(ctx, token, caseId);
     const kase = await ctx.db.get(caseId);
     if (!kase) return null;
 
@@ -331,7 +368,13 @@ export const evidencePack = query({
 export const purge = internalMutation({
   args: { caseId: v.id("cases") },
   handler: async (ctx, { caseId }) => {
-    for (const table of ["rungs", "findings", "messages", "watches"] as const) {
+    for (const table of [
+      "rungs",
+      "findings",
+      "messages",
+      "watches",
+      "members",
+    ] as const) {
       const rows = await ctx.db
         .query(table)
         .withIndex("by_case", (q) => q.eq("caseId", caseId))
@@ -342,10 +385,57 @@ export const purge = internalMutation({
   },
 });
 
+/**
+ * Invites someone else onto this case. They see the same board, updating live.
+ * A renter and the advice worker helping them are the case we built it for.
+ */
+export const share = mutation({
+  args: { token: v.string(), caseId: v.id("cases"), email: v.string() },
+  handler: async (ctx, { token, caseId, email }) => {
+    const { email: inviter, role } = await requireCaseAccess(ctx, token, caseId);
+    if (role !== "owner") throw new Error("Only the case owner can invite people.");
+
+    const addr = normaliseEmail(email);
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(addr)) {
+      throw new Error("That does not look like an email address.");
+    }
+    const kase = await ctx.db.get(caseId);
+    if (kase && normaliseEmail(kase.ownerEmail) === addr) {
+      throw new Error("That is already the owner of this case.");
+    }
+
+    const existing = await ctx.db
+      .query("members")
+      .withIndex("by_case", (q) => q.eq("caseId", caseId))
+      .collect();
+    if (existing.some((m) => normaliseEmail(m.email) === addr)) return null;
+
+    return await ctx.db.insert("members", {
+      caseId,
+      email: addr,
+      role: "collaborator",
+      invitedBy: inviter,
+      createdAt: Date.now(),
+    });
+  },
+});
+
+export const unshare = mutation({
+  args: { token: v.string(), memberId: v.id("members") },
+  handler: async (ctx, { token, memberId }) => {
+    const member = await ctx.db.get(memberId);
+    if (!member) return;
+    const { role } = await requireCaseAccess(ctx, token, member.caseId);
+    if (role !== "owner") throw new Error("Only the case owner can remove people.");
+    await ctx.db.delete(memberId);
+  },
+});
+
 /** Demo affordance: wind a rung's clock back so an expiry can be watched live. */
 export const fastForwardClock = mutation({
-  args: { caseId: v.id("cases") },
-  handler: async (ctx, { caseId }) => {
+  args: { token: v.string(), caseId: v.id("cases") },
+  handler: async (ctx, { token, caseId }) => {
+    await requireCaseAccess(ctx, token, caseId);
     const active = await ctx.db
       .query("rungs")
       .withIndex("by_case", (q) => q.eq("caseId", caseId))

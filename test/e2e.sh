@@ -22,7 +22,17 @@ say()  { printf '\n\033[1m%s\033[0m\n' "$*"; }
 ok()   { PASS=$((PASS+1)); printf '  \033[32mPASS\033[0m %s\n' "$*"; }
 bad()  { FAIL=$((FAIL+1)); printf '  \033[31mFAIL\033[0m %s\n' "$*"; }
 
-page_text() { timeout 90 bhn "$PROFILE" text 2>/dev/null; }
+page_text() {
+  local out
+  for _ in 1 2 3; do
+    out="$(timeout 90 bhn "$PROFILE" text 2>/dev/null)"
+    # bhn returns a JSON envelope; an empty or missing text field means the page
+    # was mid-navigation, so retry rather than assert against nothing.
+    if [ ${#out} -gt 120 ]; then printf '%s' "$out"; return 0; fi
+    sleep 3
+  done
+  printf '%s' "$out"
+}
 
 assert_contains() {
   local needle="$1" label="$2" hay
@@ -71,22 +81,64 @@ wh=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/agentmail/webhook
 [ "$wh" = "401" ] && ok "inbound webhook rejects unsigned POST (401)" \
                   || bad "webhook returned $wh, expected 401"
 
-# ------------------------------------------------------------ 2. sign-in gate
-say "2. Gate accepts an email and reveals the app"
+# --------------------------------------------- 2. authorization, from the API
+# These are the assertions that matter most: this product holds people's disputes.
+# Identity is taken from a session, never from an argument, so a forged or absent
+# token must be refused and a stranger must not be able to read a case.
+say "2. Authorization refuses what it should"
+
+CONVEX="./node_modules/.bin/convex"
+# Capture into a variable before matching. Piping straight into `grep -q` makes
+# grep exit on the first match, which closes the pipe and sends SIGPIPE to the
+# convex CLI; with pipefail set that surfaced as "Abort trap: 6" and made the
+# assertion fail for a reason that had nothing to do with the product.
+run() { timeout 90 "$CONVEX" run "$1" "$2" 2>&1 || true; }
+
+expect_in() {   # expect_in <needle> <label> <text>
+  if printf '%s' "$3" | grep -qF -- "$1"; then ok "$2"; else bad "$2"; fi
+}
+
+OUT="$(run cases:list '{"token":"forged-token-does-not-exist"}')"
+expect_in "Not signed in" "a forged session token is refused" "$OUT"
+
+OWNER=$(run auth:issueTestSession "{\"email\":\"$EMAIL\"}" | tr -d '"' | tail -1)
+STRANGER=$(run auth:issueTestSession '{"email":"nosy@stranger.test"}' | tr -d '"' | tail -1)
+[ ${#OWNER} -gt 10 ] && ok "a real session token was issued" || bad "no session token issued"
+
+CASE_ID=$(run cases:create "{\"token\":\"$OWNER\",\"title\":\"E2E authz probe\",\"counterparty\":\"Foxtons\",\"counterpartyUrl\":\"https://www.foxtons.co.uk/help/complaints/tenancy\",\"summary\":\"Authorization probe case.\"}" | tr -d '"' | tail -1)
+[ ${#CASE_ID} -gt 10 ] && ok "owner can create a case" || bad "case creation failed"
+
+OUT="$(run cases:board "{\"token\":\"$STRANGER\",\"caseId\":\"$CASE_ID\"}")"
+expect_in "do not have access" "a stranger cannot read someone else's case" "$OUT"
+
+OUT="$(run cases:evidencePack "{\"token\":\"$STRANGER\",\"caseId\":\"$CASE_ID\"}")"
+expect_in "do not have access" "a stranger cannot pull the evidence pack" "$OUT"
+
+run cases:share "{\"token\":\"$OWNER\",\"caseId\":\"$CASE_ID\",\"email\":\"nosy@stranger.test\"}" >/dev/null
+OUT="$(run cases:board "{\"token\":\"$STRANGER\",\"caseId\":\"$CASE_ID\"}")"
+expect_in "collaborator" "an invited collaborator can read the case" "$OUT"
+
+OUT="$(run cases:share "{\"token\":\"$STRANGER\",\"caseId\":\"$CASE_ID\",\"email\":\"third@party.test\"}")"
+expect_in "Only the case owner" "a collaborator cannot invite further people" "$OUT"
+
+# ------------------------------------------------------------ 3. sign-in gate
+say "3. The gate asks for a code, and the app opens with a session"
 timeout 180 bhn "$PROFILE" open "$BASE" >/dev/null 2>&1
 timeout 90 bhn "$PROFILE" eval "localStorage.clear(); location.reload(); 'ok'" >/dev/null 2>&1
-sleep 5
+sleep 9
 assert_contains "It is the calendar" "gate copy renders"
+assert_contains "EMAIL ME A CODE" "gate asks to email a code rather than trusting typed identity"
 
+# Sign in with the issued session rather than reading a mailbox.
 timeout 90 bhn "$PROFILE" eval \
-  "(()=>{const i=document.querySelector('input[type=email]');const s=Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value').set;s.call(i,'$EMAIL');i.dispatchEvent(new Event('input',{bubbles:true}));return 'ok'})()" >/dev/null 2>&1
-click_text "START" >/dev/null
-sleep 4
-assert_contains "WHO HAS GONE QUIET ON YOU" "case form appears after sign-in"
+  "(()=>{localStorage.setItem('ladder.token','$OWNER');location.reload();return 'ok'})()" >/dev/null 2>&1
+sleep 10
+assert_contains "WHO HAS GONE QUIET ON YOU" "case form appears once signed in"
 assert_contains "not a law firm" "legal disclaimer is visible in the product"
+assert_contains "Signed in as" "the signed-in identity is shown"
 
-# --------------------------------------------------------- 3. create a case
-say "3. Creating a case builds a sourced ladder"
+# --------------------------------------------------------- 4. create a case
+say "4. Creating a case builds a sourced ladder"
 timeout 90 bhn "$PROFILE" eval \
   "(()=>{const set=(el,v)=>{const p=el.tagName==='TEXTAREA'?window.HTMLTextAreaElement:window.HTMLInputElement;Object.getOwnPropertyDescriptor(p.prototype,'value').set.call(el,v);el.dispatchEvent(new Event('input',{bubbles:true}))};
   const f=document.querySelector('form.new');const ins=f.querySelectorAll('input');
@@ -114,8 +166,8 @@ badlinks=$(timeout 90 bhn "$PROFILE" eval \
 [ "${badlinks:-0}" = "0" ] && ok "every source link is a real http(s) URL" \
                            || bad "$badlinks source links are not real URLs"
 
-# ------------------------------------------------------ 4. the evidence pack
-say "4. Evidence pack builds from the case"
+# ------------------------------------------------------ 5. the evidence pack
+say "5. Evidence pack builds from the case"
 click_text "EVIDENCE PACK" >/dev/null
 sleep 3
 assert_contains "Complaint record" "evidence pack renders a complaint record"
@@ -124,15 +176,16 @@ assert_contains "not a law firm" "evidence pack carries the disclaimer"
 click_text "HIDE EVIDENCE PACK" >/dev/null
 sleep 1
 
-# ---------------------------------------------------- 5. source re-reading
-say "5. Re-reading the watched sources"
+# ---------------------------------------------------- 6. source re-reading
+say "6. Re-reading the watched sources"
+assert_contains "WHO ELSE CAN SEE THIS" "sharing panel is present"
 assert_contains "PAGES LADDER IS WATCHING" "watch list is present"
 click_text "RE-READ THE SOURCES" >/dev/null
 sleep 12
 assert_absent "Could not" "re-read did not error"
 
-# ------------------------------------------------ 6. clock expiry escalates
-say "6. Clock expiry drafts and sends an escalation"
+# ------------------------------------------------ 7. clock expiry escalates
+say "7. Clock expiry drafts and sends an escalation"
 before=$(timeout 90 bhn "$PROFILE" eval \
   "(()=>document.body.innerText.split('OUT').length-1)()" 2>/dev/null | grep -oE '[0-9]+' | head -1)
 click_text "WIND THE CLOCK PAST ITS DEADLINE" >/dev/null
@@ -150,8 +203,8 @@ else
 fi
 assert_contains "OVERDUE" "the expired rung is marked overdue"
 
-# ------------------------------------------------------- 7. no page errors
-say "7. The page is free of runtime errors"
+# ------------------------------------------------------- 8. no page errors
+say "8. The page is free of runtime errors"
 errs=$(timeout 90 bhn "$PROFILE" state compact 2>/dev/null \
         | grep -oE '"exceptions":[0-9]+' | grep -oE '[0-9]+' | head -1)
 [ "${errs:-0}" = "0" ] && ok "zero uncaught exceptions" || bad "$errs uncaught exceptions"

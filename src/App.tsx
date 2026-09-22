@@ -3,7 +3,7 @@ import { useQuery, useMutation } from "convex/react";
 import { api } from "../convex/_generated/api";
 import type { Id } from "../convex/_generated/dataModel";
 
-const OWNER_KEY = "ladder.owner";
+const TOKEN_KEY = "ladder.token";
 
 function remaining(dueAt: number | undefined, now: number) {
   if (!dueAt) return null;
@@ -27,13 +27,34 @@ const KIND_LABEL: Record<string, string> = {
   unrelated: "unrelated",
 };
 
+const clean = (err: unknown) =>
+  String(err)
+    .replace(/^.*?Error:\s*/s, "")
+    .replace(/\s+at\s+handler[\s\S]*$/, "")
+    .slice(0, 160);
+
 export default function App() {
-  const [owner, setOwner] = useState(
-    () => localStorage.getItem(OWNER_KEY) ?? "",
+  const [token, setToken] = useState(
+    () => localStorage.getItem(TOKEN_KEY) ?? "",
   );
   const [selected, setSelected] = useState<Id<"cases"> | null>(null);
+  const me = useQuery(api.auth.me, { token: token || undefined });
+  const signOut = useMutation(api.auth.signOut);
 
-  if (!owner) return <Gate onSet={setOwner} />;
+  const setSession = (t: string) => {
+    localStorage.setItem(TOKEN_KEY, t);
+    setToken(t);
+  };
+
+  const clearSession = async () => {
+    if (token) await signOut({ token }).catch(() => {});
+    localStorage.removeItem(TOKEN_KEY);
+    setToken("");
+    setSelected(null);
+  };
+
+  if (token && me === undefined) return <Splash />;
+  if (!me) return <Gate onSession={setSession} />;
 
   return (
     <div className="wrap">
@@ -49,21 +70,54 @@ export default function App() {
       <div className="cols">
         <div>
           {selected ? (
-            <Board caseId={selected} onBack={() => setSelected(null)} />
+            <Board
+              token={token}
+              caseId={selected}
+              onBack={() => setSelected(null)}
+            />
           ) : (
-            <NewCase owner={owner} onCreated={setSelected} />
+            <NewCase token={token} onCreated={setSelected} />
           )}
         </div>
         <div>
-          <Cases owner={owner} selected={selected} onSelect={setSelected} />
+          <Cases
+            token={token}
+            selected={selected}
+            onSelect={setSelected}
+            onNew={() => setSelected(null)}
+          />
+          <p className="mono signedin">
+            Signed in as {me.email}
+            <button className="linkish" onClick={clearSession}>
+              sign out
+            </button>
+          </p>
         </div>
       </div>
     </div>
   );
 }
 
-function Gate({ onSet }: { onSet: (v: string) => void }) {
-  const [value, setValue] = useState("");
+function Splash() {
+  return (
+    <div className="wrap" style={{ maxWidth: 520, paddingTop: 90 }}>
+      <header className="top">
+        <h1>Ladder</h1>
+      </header>
+      <p className="empty">Checking your session.</p>
+    </div>
+  );
+}
+
+function Gate({ onSession }: { onSession: (t: string) => void }) {
+  const requestCode = useMutation(api.auth.requestCode);
+  const verifyCode = useMutation(api.auth.verifyCode);
+  const [email, setEmail] = useState("");
+  const [code, setCode] = useState("");
+  const [stage, setStage] = useState<"email" | "code">("email");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
   return (
     <div className="wrap" style={{ maxWidth: 520, paddingTop: 90 }}>
       <header className="top">
@@ -74,42 +128,106 @@ function Gate({ onSet }: { onSet: (v: string) => void }) {
         argument. It is the calendar, and not knowing who above them is obliged
         to listen.
       </p>
-      <form
-        className="new"
-        onSubmit={(e) => {
-          e.preventDefault();
-          const v = value.trim();
-          if (!v) return;
-          localStorage.setItem(OWNER_KEY, v);
-          onSet(v);
-        }}
-      >
-        <label>
-          <span>Your email</span>
-          <input
-            type="email"
-            required
-            value={value}
-            placeholder="you@example.com"
-            onChange={(e) => setValue(e.target.value)}
-          />
-        </label>
-        <button type="submit">Start</button>
-      </form>
+
+      {stage === "email" ? (
+        <form
+          className="new"
+          onSubmit={async (e) => {
+            e.preventDefault();
+            setBusy(true);
+            setError("");
+            try {
+              await requestCode({ email: email.trim() });
+              setStage("code");
+            } catch (err) {
+              setError(clean(err));
+            } finally {
+              setBusy(false);
+            }
+          }}
+        >
+          <label>
+            <span>Your email</span>
+            <input
+              type="email"
+              required
+              value={email}
+              placeholder="you@example.com"
+              onChange={(e) => setEmail(e.target.value)}
+            />
+          </label>
+          {error && <p className="err mono">{error}</p>}
+          <button type="submit" disabled={busy}>
+            {busy ? "Sending" : "Email me a code"}
+          </button>
+        </form>
+      ) : (
+        <form
+          className="new"
+          onSubmit={async (e) => {
+            e.preventDefault();
+            setBusy(true);
+            setError("");
+            try {
+              const r = await verifyCode({
+                email: email.trim(),
+                code: code.trim(),
+              });
+              onSession(r.token);
+            } catch (err) {
+              setError(clean(err));
+            } finally {
+              setBusy(false);
+            }
+          }}
+        >
+          <p className="mono" style={{ marginTop: 0, color: "var(--dim)" }}>
+            Six digits, sent to {email}. It lasts ten minutes.
+          </p>
+          <label>
+            <span>Code</span>
+            <input
+              required
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              value={code}
+              placeholder="000000"
+              onChange={(e) => setCode(e.target.value)}
+            />
+          </label>
+          {error && <p className="err mono">{error}</p>}
+          <button type="submit" disabled={busy}>
+            {busy ? "Checking" : "Sign in"}
+          </button>{" "}
+          <button
+            type="button"
+            className="ghost"
+            onClick={() => {
+              setStage("email");
+              setCode("");
+              setError("");
+            }}
+          >
+            Different email
+          </button>
+        </form>
+      )}
     </div>
   );
 }
 
 function Cases({
-  owner,
+  token,
   selected,
   onSelect,
+  onNew,
 }: {
-  owner: string;
+  token: string;
   selected: Id<"cases"> | null;
   onSelect: (id: Id<"cases">) => void;
+  onNew: () => void;
 }) {
-  const cases = useQuery(api.cases.list, { ownerEmail: owner });
+  const cases = useQuery(api.cases.list, { token });
   return (
     <>
       <h2 className="sec">Your cases</h2>
@@ -131,13 +249,14 @@ function Cases({
             <br />
             <span className="mono" style={{ color: "var(--dim)" }}>
               {c.counterparty} · {c.status.replace(/_/g, " ")}
+              {c.sharedWithMe ? " · shared with you" : ""}
             </span>
           </button>
         ))}
       </div>
       {selected && (
         <p style={{ marginTop: 22 }}>
-          <button className="ghost" onClick={() => location.reload()}>
+          <button className="ghost" onClick={onNew}>
             New case
           </button>
         </p>
@@ -147,10 +266,10 @@ function Cases({
 }
 
 function NewCase({
-  owner,
+  token,
   onCreated,
 }: {
-  owner: string;
+  token: string;
   onCreated: (id: Id<"cases">) => void;
 }) {
   const create = useMutation(api.cases.create);
@@ -170,10 +289,10 @@ function NewCase({
           setBusy(true);
           try {
             const id = await create({
+              token,
               title: title.trim(),
               counterparty: counterparty.trim(),
               counterpartyUrl: url.trim() || undefined,
-              ownerEmail: owner,
               summary: summary.trim() || undefined,
             });
             onCreated(id);
@@ -226,18 +345,24 @@ function NewCase({
 }
 
 function Board({
+  token,
   caseId,
   onBack,
 }: {
+  token: string;
   caseId: Id<"cases">;
   onBack: () => void;
 }) {
-  const data = useQuery(api.cases.board, { caseId });
-  const pack = useQuery(api.cases.evidencePack, { caseId });
+  const data = useQuery(api.cases.board, { token, caseId });
+  const pack = useQuery(api.cases.evidencePack, { token, caseId });
   const fastForward = useMutation(api.cases.fastForwardClock);
   const recheck = useMutation(api.cases.recheckSources);
+  const share = useMutation(api.cases.share);
+  const unshare = useMutation(api.cases.unshare);
   const [now, setNow] = useState(Date.now());
   const [showPack, setShowPack] = useState(false);
+  const [invite, setInvite] = useState("");
+  const [shareErr, setShareErr] = useState("");
 
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 1000);
@@ -247,7 +372,7 @@ function Board({
   if (data === undefined) return <p className="empty">Loading.</p>;
   if (data === null) return <p className="empty">That case is gone.</p>;
 
-  const { case: kase, rungs, findings, messages, watches } = data;
+  const { case: kase, rungs, findings, messages, watches, members, role } = data;
   const hasClock = rungs.some((r) => r.state === "active" && r.dueAt);
   const moved = (watches ?? []).filter((w) => w.lastChangedAt);
 
@@ -265,6 +390,7 @@ function Board({
     <>
       <h2 className="sec">
         {kase.counterparty} · {kase.status.replace(/_/g, " ")}
+        {role === "collaborator" ? " · shared with you" : ""}
       </h2>
 
       {kase.inboxEmail && (
@@ -336,7 +462,7 @@ function Board({
         {hasClock && (
           <button
             className="ghost"
-            onClick={() => fastForward({ caseId })}
+            onClick={() => fastForward({ token, caseId })}
             title="The real windows are weeks long. This winds the current one past its deadline so you can watch what Ladder does when it runs out."
           >
             Wind the clock past its deadline
@@ -344,7 +470,7 @@ function Board({
         )}
         <button
           className="ghost"
-          onClick={() => recheck({ caseId })}
+          onClick={() => recheck({ token, caseId })}
           title="Re-reads the pages this ladder was built from and reports anything that moved."
         >
           Re-read the sources
@@ -357,9 +483,7 @@ function Board({
       {showPack && (
         <div className="pack">
           <div className="packhead">
-            <span className="mono">
-              {pack ? pack.filename : "building…"}
-            </span>
+            <span className="mono">{pack ? pack.filename : "building…"}</span>
             <button onClick={downloadPack} disabled={!pack}>
               Download
             </button>
@@ -367,6 +491,55 @@ function Board({
           <pre className="mono">{pack?.markdown ?? ""}</pre>
         </div>
       )}
+
+      <h2 className="sec" style={{ marginTop: 38 }}>
+        Who else can see this
+      </h2>
+      {(members ?? []).length === 0 && (
+        <p className="empty">
+          Only you. Invite whoever is helping you and they see this board update
+          live.
+        </p>
+      )}
+      {(members ?? []).map((m) => (
+        <p key={m._id} className="mono member">
+          {m.email}
+          <span style={{ color: "var(--dim)" }}> · {m.role}</span>
+          {role === "owner" && (
+            <button
+              className="linkish"
+              onClick={() => unshare({ token, memberId: m._id })}
+            >
+              remove
+            </button>
+          )}
+        </p>
+      ))}
+      {role === "owner" && (
+        <form
+          className="inviteform"
+          onSubmit={async (e) => {
+            e.preventDefault();
+            setShareErr("");
+            try {
+              await share({ token, caseId, email: invite.trim() });
+              setInvite("");
+            } catch (err) {
+              setShareErr(clean(err));
+            }
+          }}
+        >
+          <input
+            type="email"
+            required
+            value={invite}
+            placeholder="caseworker@citizensadvice.org.uk"
+            onChange={(e) => setInvite(e.target.value)}
+          />
+          <button type="submit">Invite</button>
+        </form>
+      )}
+      {shareErr && <p className="err mono">{shareErr}</p>}
 
       {(watches ?? []).length > 0 && (
         <>
@@ -389,9 +562,7 @@ function Board({
                   <span style={{ color: "var(--dim)" }}> no change</span>
                 )}
               </p>
-              {w.changeSummary && (
-                <blockquote>{w.changeSummary}</blockquote>
-              )}
+              {w.changeSummary && <blockquote>{w.changeSummary}</blockquote>}
               <a
                 className="src mono"
                 href={w.url}

@@ -20,6 +20,36 @@ export const caseStatus = v.union(
 );
 
 export default defineSchema({
+  // Sign-in codes, posted to the address being claimed. Stored hashed so a database
+  // read does not hand someone a working code.
+  loginCodes: defineTable({
+    email: v.string(),
+    codeHash: v.string(),
+    expiresAt: v.number(),
+    attempts: v.number(),
+  }).index("by_email", ["email"]),
+
+  sessions: defineTable({
+    token: v.string(),
+    email: v.string(),
+    createdAt: v.number(),
+    expiresAt: v.number(),
+  })
+    .index("by_token", ["token"])
+    .index("by_email", ["email"]),
+
+  // Someone else invited onto a case: a partner, a flatmate, an advice worker.
+  // They see the same board update live.
+  members: defineTable({
+    caseId: v.id("cases"),
+    email: v.string(),
+    role: v.union(v.literal("owner"), v.literal("collaborator")),
+    invitedBy: v.string(),
+    createdAt: v.number(),
+  })
+    .index("by_case", ["caseId"])
+    .index("by_email", ["email"]),
+
   cases: defineTable({
     title: v.string(),
     counterparty: v.string(),

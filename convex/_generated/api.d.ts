@@ -8,6 +8,7 @@
  * @module
  */
 
+import type * as auth from "../auth.js";
 import type * as cases from "../cases.js";
 import type * as classify from "../classify.js";
 import type * as crons from "../crons.js";
@@ -25,6 +26,7 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  auth: typeof auth;
   cases: typeof cases;
   classify: typeof classify;
   crons: typeof crons;

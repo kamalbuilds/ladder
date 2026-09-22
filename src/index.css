@@ -218,6 +218,50 @@ h2.sec {
   font-size: 14px;
 }
 
+.err {
+  color: var(--overdue);
+  margin: 0 0 12px;
+}
+
+.signedin {
+  margin-top: 26px;
+  padding-top: 12px;
+  border-top: 1px solid var(--rule);
+  color: var(--dim);
+}
+
+.member {
+  margin: 0 0 7px;
+}
+
+button.linkish {
+  background: none;
+  border: none;
+  color: var(--dim);
+  text-transform: none;
+  letter-spacing: 0;
+  padding: 0 0 0 9px;
+  font-size: 12px;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+button.linkish:hover {
+  background: none;
+  color: var(--overdue);
+}
+
+.inviteform {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+  max-width: 460px;
+}
+
+.inviteform input {
+  flex: 1;
+}
+
 .finding.alert {
   border-left-color: var(--overdue);
   background: #fff6f4;
