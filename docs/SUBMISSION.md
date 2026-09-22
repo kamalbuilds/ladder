@@ -66,11 +66,21 @@ Under 3 minutes. Suggested run of show, click through the real product and talk 
 6. Hit **Wind the clock past its deadline**. Say the windows are genuinely weeks long, so
    this is a labelled control, and the clock, the draft and the send are all real.
 7. Show the drafted escalation.
-8. Switch to the American Airlines case. Show it routed to the US Department of
-   Transportation instead, with 60-day and 30-day clocks. Nothing is hardcoded.
-9. Show **Correspondence**: two real inbound emails tagged **holding reply**, with
-   Ladder's reason. Close on that: *this is what a company sends when it wants your
-   clock to run out.*
+8. Click **Evidence pack**. Say: this is the document you attach to the ombudsman. Dated,
+   every step with its published window, every quote with its link, and the full
+   correspondence. Hit Download so judges see it is a real file.
+9. Point at **Pages Ladder is watching**. Say: organisations rewrite their complaints
+   procedure quietly, and your deadline moves with it. Ladder re-reads these every six
+   hours and only tells you when a deadline, an authority or a contact route actually
+   changed.
+10. Switch to the American Airlines case. Show it routed to the US Department of
+    Transportation instead, with 60-day and 30-day clocks. Nothing is hardcoded.
+11. Show **Correspondence**: real inbound emails tagged **holding reply**, with Ladder's
+    reason. Close on that: *this is what a company sends when it wants your clock to run
+    out.*
+
+Optional 10-second closer if the pacing allows: run `./test/e2e.sh` and show 21 of 21
+passing against the live URL.
 
 ---
 
