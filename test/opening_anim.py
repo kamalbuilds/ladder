@@ -83,17 +83,22 @@ def beat1(t, total):
     chrome(d, "WHAT LADDER DOES")
     ctr(d, "A company has stopped replying to you.", H2, 168, INK)
 
-    bw, bh, gap = 372, 268, 44
+    bw, bh, gap = 392, 320, 36
     x0 = (W - (bw * 3 + gap * 2)) // 2
     y = 300
     steps = [
-        ("1  You name them", ["The letting agent.", "The airline.", "The council."], INK),
-        ("2  Ladder reads", ["their own complaints page,", "then the regulator's.", "Who has power over them,",
-                             "and the window they published."], LIVE),
-        ("3  It escalates", ["the day that window", "runs out, citing the", "deadline that passed."], OVER),
+        ("1  You name them", ["The letting agent.", "The airline.", "The council.",
+                              "", "That is the whole input."], INK),
+        ("2  FIRECRAWL crawls", ["their own complaints page,", "then the regulator's.",
+                                 "", "OPENAI turns what it read",
+                                 "into an ordered ladder, with",
+                                 "the deadline they published."], LIVE),
+        ("3  CONVEX holds the clock", ["a cron sweeps every", "expired window.", "",
+                                       "AGENTMAIL sends the", "escalation, and reads",
+                                       "the replies that come back."], OVER),
     ]
     for i, (title, body, accent) in enumerate(steps):
-        appear = cl((t - 2.2 - i * 3.0) / 0.8)
+        appear = cl((t - 2.6 - i * 4.4) / 0.8)
         if appear <= 0:
             continue
         x = x0 + i * (bw + gap)
@@ -102,10 +107,10 @@ def beat1(t, total):
         if i > 0 and appear > 0.5:
             arrow(d, x - gap + 6, y + bh // 2, x - 8)
 
-    if t > 12.6:
-        ctr(d, "Every deadline links to the page it was read from.", MS, 640, DIM)
-    if t > 15.0:
-        ctr(d, "It is not legal advice. It is their own published rules, on time.", MT, 686, DIM)
+    if t > 18.0:
+        ctr(d, "Every deadline links to the page it was read from.", MS, 690, DIM)
+    if t > 21.0:
+        ctr(d, "Not legal advice. Their own published rules, on time.", MT, 736, DIM)
     return img
 
 
