@@ -116,29 +116,44 @@ def beat1(t, total):
 
 # ---------------------------------------------------------------- beat 2
 def email_card(d, x, y, w, reveal):
-    """A mocked airline confirmation, so the viewer sees the thing described."""
-    h = 258
+    """
+    A representative airline confirmation, so the viewer sees the document being
+    described rather than hearing a number read out.
+
+    Every line is measured against the card width before it is drawn, because the
+    emphasised line uses a larger face and previously ran past the right border.
+    """
+    h = 282
     d.rounded_rectangle([x, y, x + w, y + h], radius=10, fill=WHITE, outline=RULE, width=2)
     d.rectangle([x, y, x + w, y + 46], fill=(247, 245, 240))
     d.line([x, y + 46, x + w, y + 46], fill=RULE, width=2)
     d.text((x + 20, y + 14), "Customer Relations", font=MS, fill=INK)
     d.text((x + w - 152, y + 15), "14 July", font=MT, fill=DIM)
+
     body = [
-        "Dear Mr Adeyemi,",
-        "",
-        "Following your claim for flight AA101 on 10 July,",
-        "we can confirm you are eligible for compensation",
-        "of GBP 520.00 under UK air passenger rights.",
-        "",
-        "Please reply with your bank details to proceed.",
+        ("Dear Mr Adeyemi,", False),
+        ("", False),
+        ("Following your claim for flight AA101 on 10 July,", False),
+        ("we can confirm you are eligible for compensation", False),
+        ("of GBP 520.00 under UK air passenger rights.", True),
+        ("", False),
+        ("Please reply with your bank details to proceed.", False),
     ]
     shown = int(len(body) * ease(cl(reveal)))
     yy = y + 64
-    for ln in body[:shown]:
-        col = INK if "520" in ln else DIM
-        fo = MB if "520" in ln else MT
-        d.text((x + 20, yy), ln, font=fo, fill=col)
-        yy += 27 if "520" not in ln else 32
+    inner = w - 40
+    for text, strong in body[:shown]:
+        fo = MB if strong else MT
+        # Shrink rather than overflow: measure, then step the face down until it fits.
+        if text:
+            size = 25 if strong else 17
+            while size > 12:
+                fo = f(MON, size)
+                if d.textbbox((0, 0), text, font=fo)[2] <= inner:
+                    break
+                size -= 1
+        d.text((x + 20, yy), text, font=fo, fill=INK if strong else DIM)
+        yy += 32 if strong else 27
 
 
 def beat2(t, total):
