@@ -68,7 +68,7 @@ def main():
         length = dur(wav)
         out = f"{OUT}/p-{name}.mp4"
 
-        if name == "02-problem":
+        if name in ("01-gate", "02-problem"):
             concat.append(f"file 'p-{name}.mp4'")
             words = lines[i - 1].split()
             chunk, chunks = [], []
