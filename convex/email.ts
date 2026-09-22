@@ -3,7 +3,7 @@ import { AgentMail } from "@agentmail/convex";
 
 declare const process: { env: Record<string, string | undefined> };
 import { components, internal } from "./_generated/api";
-import { internalMutation, internalAction, action } from "./_generated/server";
+import { internalMutation, internalAction } from "./_generated/server";
 
 // One instance, exported, because the onMessageReceived handle is baked in when
 // handleWebhook runs. Constructing a second bare AgentMail elsewhere and mounting
@@ -114,15 +114,25 @@ export const onMessageReceived = internalMutation({
       if (prior) kase = await ctx.db.get(prior.caseId);
     }
 
-    // Otherwise the newest still-open case on this inbox. Stated plainly because
-    // it is a heuristic, not an identification.
+    // No thread match. Only safe to attribute when this inbox serves exactly one
+    // open case. On the free plan every case can share one pinned inbox, and
+    // "newest open case" would file a stranger's mail onto someone else's legal
+    // record, where it is then rendered on their board and inside the evidence
+    // pack they send to an ombudsman. Refuse instead of guessing.
     if (!kase) {
       const candidates = await ctx.db
         .query("cases")
         .withIndex("by_inbox", (q) => q.eq("inboxId", inboxId))
         .order("desc")
-        .take(10);
-      kase = candidates.find((c) => c.status !== "resolved") ?? null;
+        .take(20);
+      const open = candidates.filter((c) => c.status !== "resolved");
+      if (open.length !== 1) {
+        console.warn(
+          `unroutable inbound on ${inboxId}: ${open.length} open cases, dropping rather than guessing`,
+        );
+        return;
+      }
+      kase = open[0];
     }
     if (!kase) return;
 
@@ -239,11 +249,7 @@ export const attachThread = internalMutation({
   },
 });
 
-// Exposed so the demo can prove inbound works without waiting on a real sender.
-export const inboxAddress = action({
-  args: { caseId: v.id("cases") },
-  handler: async (ctx, { caseId }): Promise<string | null> => {
-    const kase = await ctx.runQuery(internal.cases.getInternal, { caseId });
-    return kase?.inboxEmail ?? null;
-  },
-});
+// Removed: a public action taking a caseId with no session token let any caller
+// read any case's inbox address, which is the address that makes inbound
+// injection possible. The board query already returns inboxEmail, and it is
+// behind requireCaseAccess.

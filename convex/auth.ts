@@ -16,6 +16,7 @@ declare const process: { env: Record<string, string | undefined> };
 const CODE_TTL_MS = 10 * 60 * 1000;
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const MAX_ATTEMPTS = 5;
+const RESEND_COOLDOWN_MS = 60 * 1000;
 
 /**
  * Codes and tokens are compared as hashes, so the table never holds a usable
@@ -99,11 +100,23 @@ export const requestCode = mutation({
       throw new Error("That does not look like an email address.");
     }
 
-    // One live code per address.
     const existing = await ctx.db
       .query("loginCodes")
       .withIndex("by_email", (q) => q.eq("email", addr))
       .collect();
+
+    // Carry the attempt count across re-requests. Deleting the row and inserting
+    // a fresh one with attempts: 0 made the 5-attempt cap meaningless: request a
+    // code, guess five times, request again. That turns a six digit code into a
+    // 200k-round brute force, and it also made this an open mail relay.
+    const live = existing.find((e) => e.expiresAt > Date.now());
+    const carried = live?.attempts ?? 0;
+    if (carried >= MAX_ATTEMPTS) {
+      throw new Error("Too many attempts for this address. Try again later.");
+    }
+    if (live && Date.now() - live._creationTime < RESEND_COOLDOWN_MS) {
+      throw new Error("A code was just sent. Check your email, or wait a minute.");
+    }
     for (const e of existing) await ctx.db.delete(e._id);
 
     const code = String(Math.floor(100000 + Math.random() * 900000));
@@ -111,7 +124,7 @@ export const requestCode = mutation({
       email: addr,
       codeHash: hashCode(addr, code),
       expiresAt: Date.now() + CODE_TTL_MS,
-      attempts: 0,
+      attempts: carried,
     });
 
     await ctx.scheduler.runAfter(0, internal.auth.deliverCode, {

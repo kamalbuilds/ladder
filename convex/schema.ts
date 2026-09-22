@@ -76,8 +76,11 @@ export default defineSchema({
     authority: v.string(),
     // What the user has to do, in their own words.
     action: v.string(),
-    // Where to send it, when we found a real address.
+    // Where to send it, when we found a real address. Validated as an email
+    // before it is written, because it is used as a send recipient.
     contact: v.optional(v.string()),
+    // A form or contact page, kept separate so it can never be used as a recipient.
+    contactUrl: v.optional(v.string()),
     // The statutory or published window, in days, and where we read it.
     clockDays: v.optional(v.number()),
     clockLabel: v.optional(v.string()),

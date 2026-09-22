@@ -18,14 +18,14 @@ W, H = 1440, 900
 
 # name, source clip, cursor waypoints [(t_frac, x, y)] in output pixel space
 BEATS = [
-    ("01-gate", "01-gate.mp4", [(0.0, 300, 300), (0.4, 520, 430), (1.0, 700, 640)]),
-    ("02-problem", "02-problem.mp4", [(0.0, 900, 240), (0.35, 640, 400), (1.0, 700, 600)]),
-    ("03-create", "03-create.mp4", [(0.0, 420, 250), (0.3, 430, 330), (0.6, 430, 470), (1.0, 380, 640)]),
-    ("04-ladder", "04-ladder.mp4", [(0.0, 380, 260), (0.35, 520, 380), (0.7, 470, 520), (1.0, 640, 660)]),
-    ("05-escalate", "05-escalate.mp4", [(0.0, 700, 300), (0.25, 620, 250), (0.6, 400, 420), (1.0, 500, 560)]),
-    ("06-agentmail", "06-agentmail.mp4", [(0.0, 500, 330), (0.5, 620, 420), (1.0, 700, 470)]),
-    ("07-convex", "07-convex.mp4", [(0.0, 300, 330), (0.5, 560, 430), (1.0, 820, 500)]),
-    ("08-watch-pack", "08-watch-pack.mp4", [(0.0, 420, 300), (0.4, 700, 400), (1.0, 560, 620)]),
+    ("01-gate", "01-gate.mp4", []),
+    ("02-problem", "02-problem.mp4", []),
+    ("03-create", "03-create.mp4", []),
+    ("04-ladder", "04-ladder.mp4", []),
+    ("05-escalate", "05-escalate.mp4", []),
+    ("06-agentmail", "06-agentmail.mp4", []),
+    ("07-convex", "07-convex.mp4", []),
+    ("08-watch-pack", "08-watch-pack.mp4", []),
     ("09-tests", None, []),  # rendered from the real test output card
 ]
 
@@ -67,6 +67,24 @@ def main():
         wav = f"{VO}/line{i}.wav"
         length = dur(wav)
         out = f"{OUT}/p-{name}.mp4"
+
+        if name == "02-problem":
+            concat.append(f"file 'p-{name}.mp4'")
+            words = lines[i - 1].split()
+            chunk, chunks = [], []
+            for w in words:
+                chunk.append(w)
+                if len(" ".join(chunk)) > 46:
+                    chunks.append(" ".join(chunk)); chunk = []
+            if chunk:
+                chunks.append(" ".join(chunk))
+            t = clock
+            tw = sum(len(c.split()) for c in chunks) or 1
+            for c in chunks:
+                seg = length * (len(c.split()) / tw)
+                srt.append((t, t + seg, c)); t += seg
+            clock += length
+            continue
 
         if src is None:
             base = ["-loop", "1", "-i", f"{OUT}/e2e-card.png"]

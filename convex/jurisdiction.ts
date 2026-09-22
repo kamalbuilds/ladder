@@ -267,7 +267,18 @@ ${corpus}`,
             name,
             authority,
             action: str(r?.action) ?? `Contact ${authority} about this complaint.`,
-            contact: str(r?.contact),
+            // Only a real address may become a `contact`. The prompt invites a
+            // form URL too, and anything here is later used as an email
+            // recipient, so a page in the crawl corpus could otherwise steer
+            // where a complaint gets sent.
+            contact: (() => {
+              const c = str(r?.contact);
+              return c && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(c) ? c : undefined;
+            })(),
+            contactUrl: (() => {
+              const c = str(r?.contact);
+              return c && /^https?:\/\//i.test(c) ? c : undefined;
+            })(),
             clockDays: Number.isFinite(days) && days > 0 ? days : undefined,
             clockLabel: str(r?.clockLabel),
             sourceUrl: sourced(r?.sourceUrl),

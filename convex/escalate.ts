@@ -2,6 +2,8 @@ import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import { internalAction, internalQuery } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
+
+declare const process: { env: Record<string, string | undefined> };
 import { chatJson } from "./llm";
 
 type Draft = { subject: string; body: string };
@@ -81,7 +83,16 @@ export const escalateRung = internalAction({
     });
 
     const target = nextRung ?? rung;
-    const recipient = target.contact ?? kase.ownerEmail;
+
+    // Re-assert the address shape at the send boundary rather than trusting what
+    // was written, and never send to a regulator from the demo control. Falling
+    // back to the case owner means a misread page costs a wasted email to
+    // yourself, not a burnt first contact with an ombudsman.
+    const looksLikeEmail = (s: string | undefined): s is string =>
+      !!s && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(s);
+    const demo = process.env.LADDER_DEMO === "1";
+    const recipient =
+      !demo && looksLikeEmail(target.contact) ? target.contact : kase.ownerEmail;
 
     try {
       const draft = await chatJson<Draft>({
@@ -137,10 +148,21 @@ ${
         status: nextRung ? "escalated" : "ready_to_escalate",
       });
     } catch (e) {
-      console.error("escalateRung failed", e);
+      // The rung was marked expired before the send so two sweeps cannot both
+      // fire it. If the draft or send then failed, leaving it expired would
+      // remove it from dueRungs forever and the clock would silently stop being
+      // watched, which is the one thing this product must never do. Put it back
+      // in the queue with a short retry window instead.
+      console.error("escalateRung failed, requeueing", e);
+      await ctx.runMutation(internal.cases.setRungState, {
+        rungId,
+        state: "active",
+        startedAt: rung.startedAt,
+        dueAt: Date.now() + 15 * 60 * 1000,
+      });
       await ctx.runMutation(internal.cases.setWorking, {
         caseId,
-        working: `Could not send the escalation: ${String(e).slice(0, 160)}`,
+        working: `Could not send yet, will retry: ${String(e).slice(0, 140)}`,
       });
     }
   },

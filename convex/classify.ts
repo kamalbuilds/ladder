@@ -73,6 +73,7 @@ ${bundle.text.slice(0, 6000)}`,
       await ctx.runMutation(internal.classify.applyVerdict, {
         caseId,
         messageId,
+        from: bundle.from,
         replyKind: verdict.replyKind,
         replyReason: verdict.reason,
         startsClock: !!verdict.startsClock,
@@ -120,6 +121,7 @@ export const applyVerdict = internalMutation({
   args: {
     caseId: v.id("cases"),
     messageId: v.id("messages"),
+    from: v.string(),
     replyKind: v.union(
       v.literal("substantive_answer"),
       v.literal("holding_acknowledgement"),
@@ -147,6 +149,31 @@ export const applyVerdict = internalMutation({
       startsClock: args.startsClock,
       rungId: active?._id,
     });
+
+    // Only a sender that plausibly IS the counterparty may move the ladder.
+    // The party with the strongest motive to stop your clock is the one you are
+    // complaining about, and anyone who learns the inbox address can send text
+    // the classifier will read. Classification is still shown either way; only
+    // the state transitions are gated.
+    const kase = await ctx.db.get(args.caseId);
+    const domain = (args.from.match(/@([^\s>]+)/)?.[1] ?? "").toLowerCase();
+    const rungContacts = ordered
+      .map((r) => (r.contact ?? "").split("@")[1]?.toLowerCase())
+      .filter(Boolean) as string[];
+    const counterpartyWords = (kase?.counterparty ?? "")
+      .toLowerCase()
+      .split(/[^a-z0-9]+/)
+      .filter((w) => w.length > 3);
+    const senderIsCounterparty =
+      !!domain &&
+      (rungContacts.includes(domain) ||
+        counterpartyWords.some((w) => domain.includes(w)) ||
+        (kase?.counterpartyUrl ?? "").toLowerCase().includes(domain.split(".")[0]));
+
+    if (!senderIsCounterparty) {
+      await ctx.db.patch(args.caseId, { working: undefined });
+      return;
+    }
 
     // A final response is the thing that unlocks the next authority. A holding
     // acknowledgement deliberately changes nothing, which is the whole point.
