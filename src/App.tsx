@@ -233,8 +233,11 @@ function Board({
   onBack: () => void;
 }) {
   const data = useQuery(api.cases.board, { caseId });
+  const pack = useQuery(api.cases.evidencePack, { caseId });
   const fastForward = useMutation(api.cases.fastForwardClock);
+  const recheck = useMutation(api.cases.recheckSources);
   const [now, setNow] = useState(Date.now());
+  const [showPack, setShowPack] = useState(false);
 
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 1000);
@@ -244,8 +247,19 @@ function Board({
   if (data === undefined) return <p className="empty">Loading.</p>;
   if (data === null) return <p className="empty">That case is gone.</p>;
 
-  const { case: kase, rungs, findings, messages } = data;
+  const { case: kase, rungs, findings, messages, watches } = data;
   const hasClock = rungs.some((r) => r.state === "active" && r.dueAt);
+  const moved = (watches ?? []).filter((w) => w.lastChangedAt);
+
+  const downloadPack = () => {
+    if (!pack) return;
+    const blob = new Blob([pack.markdown], { type: "text/markdown" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = pack.filename;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  };
 
   return (
     <>
@@ -315,7 +329,7 @@ function Board({
         })}
       </div>
 
-      <p style={{ display: "flex", gap: 10, marginTop: 8 }}>
+      <p style={{ display: "flex", gap: 10, marginTop: 8, flexWrap: "wrap" }}>
         <button className="ghost" onClick={onBack}>
           Back
         </button>
@@ -328,7 +342,75 @@ function Board({
             Wind the clock past its deadline
           </button>
         )}
+        <button
+          className="ghost"
+          onClick={() => recheck({ caseId })}
+          title="Re-reads the pages this ladder was built from and reports anything that moved."
+        >
+          Re-read the sources
+        </button>
+        <button className="ghost" onClick={() => setShowPack((s) => !s)}>
+          {showPack ? "Hide evidence pack" : "Evidence pack"}
+        </button>
       </p>
+
+      {showPack && (
+        <div className="pack">
+          <div className="packhead">
+            <span className="mono">
+              {pack ? pack.filename : "building…"}
+            </span>
+            <button onClick={downloadPack} disabled={!pack}>
+              Download
+            </button>
+          </div>
+          <pre className="mono">{pack?.markdown ?? ""}</pre>
+        </div>
+      )}
+
+      {(watches ?? []).length > 0 && (
+        <>
+          <h2 className="sec" style={{ marginTop: 38 }}>
+            Pages Ladder is watching
+          </h2>
+          {(watches ?? []).map((w) => (
+            <div
+              className={`finding${w.changeMatters ? " alert" : ""}`}
+              key={w._id}
+            >
+              <p className="claim">
+                {w.label}
+                {w.lastChangedAt ? (
+                  <strong>
+                    {" "}
+                    changed {new Date(w.lastChangedAt).toLocaleDateString()}
+                  </strong>
+                ) : (
+                  <span style={{ color: "var(--dim)" }}> no change</span>
+                )}
+              </p>
+              {w.changeSummary && (
+                <blockquote>{w.changeSummary}</blockquote>
+              )}
+              <a
+                className="src mono"
+                href={w.url}
+                target="_blank"
+                rel="noreferrer"
+              >
+                {w.url}
+              </a>
+            </div>
+          ))}
+          {moved.length === 0 && (
+            <p className="empty">
+              Checked every six hours. If one of these pages rewrites a deadline
+              or names a different ombudsman, it shows up here and in the
+              evidence pack.
+            </p>
+          )}
+        </>
+      )}
 
       {findings.length > 0 && (
         <>

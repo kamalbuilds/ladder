@@ -21,7 +21,7 @@ const firecrawl = new FirecrawlClient(components.firecrawl);
  * materially changes ladder quality: without it we are building from search
  * snippets instead of the page that actually states the deadline.
  */
-async function scrapeMarkdown(
+export async function scrapeMarkdown(
   ctx: any,
   url: string,
   onlyMainContent: boolean,
@@ -312,6 +312,25 @@ ${corpus}`,
         caseId,
         rungs,
         findings,
+      });
+
+      // Everything the ladder leans on gets watched. If one of these pages
+      // rewrites its deadline later, the ladder is quietly wrong.
+      const relied = new Set(
+        [
+          ...rungs.map((r) => r.sourceUrl),
+          ...findings.map((f) => f.sourceUrl),
+        ].filter((u): u is string => !!u),
+      );
+      await ctx.runMutation(internal.watch.registerWatches, {
+        caseId,
+        pages: pages
+          .filter((p) => relied.has(p.url))
+          .map((p) => ({
+            url: p.url,
+            label: new URL(p.url).hostname.replace(/^www\./, ""),
+            text: p.text,
+          })),
       });
     } catch (e) {
       console.error("mapLadder failed", e);

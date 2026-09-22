@@ -218,6 +218,38 @@ h2.sec {
   font-size: 14px;
 }
 
+.finding.alert {
+  border-left-color: var(--overdue);
+  background: #fff6f4;
+  padding: 9px 0 9px 13px;
+}
+
+.pack {
+  border: 1px solid var(--ink);
+  background: #fff;
+  margin: 18px 0 8px;
+}
+
+.packhead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--rule);
+  background: var(--paper);
+}
+
+.pack pre {
+  margin: 0;
+  padding: 14px;
+  max-height: 340px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.45;
+}
+
 .msg {
   border-bottom: 1px solid var(--rule);
   padding: 13px 0;

@@ -13,4 +13,13 @@ crons.interval(
   {},
 );
 
+// Organisations rewrite their complaints procedure without telling anyone, and the
+// deadline you were relying on moves with it. Small batches on purpose.
+crons.interval(
+  "re-read the pages each ladder was built from",
+  { hours: 6 },
+  internal.watch.sweepWatches,
+  {},
+);
+
 export default crons;

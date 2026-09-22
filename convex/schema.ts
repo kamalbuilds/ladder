@@ -76,6 +76,23 @@ export default defineSchema({
     createdAt: v.number(),
   }).index("by_case", ["caseId"]),
 
+  // Pages Ladder relied on when it built the ladder. Organisations rewrite their
+  // complaints procedure quietly, and when they do the deadline you are relying on
+  // changes underneath you. These get re-read and diffed.
+  watches: defineTable({
+    caseId: v.id("cases"),
+    url: v.string(),
+    label: v.string(),
+    contentHash: v.string(),
+    excerpt: v.string(),
+    lastCheckedAt: v.number(),
+    lastChangedAt: v.optional(v.number()),
+    changeSummary: v.optional(v.string()),
+    changeMatters: v.optional(v.boolean()),
+  })
+    .index("by_case", ["caseId"])
+    .index("by_checked", ["lastCheckedAt"]),
+
   messages: defineTable({
     caseId: v.id("cases"),
     direction: v.union(v.literal("inbound"), v.literal("outbound")),
